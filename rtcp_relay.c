@@ -33,23 +33,26 @@
 
 MODULE_VERSION
 
+int *new_port;
+rtcp_sessions_t sessions;
 int latch_delay_ms = 0;
 static int mod_init(void);
 static void destroy(void);
 static int child_init(int rank);
 
-static int fixup_rtp_spoof(void** param, int param_no);
+static int fixup_rtcp_add(void** param, int param_no);
 
-static int rtp_spoof_f(struct sip_msg *msg, char* src_ip, char* src_port, char* dst_ip, char* dst_port);
+static int rtcp_add_f(struct sip_msg *msg, char* ip, char* port);
 
 static cmd_export_t cmds[] = {
-//		{"rtp_spoof", (cmd_function)rtp_spoof_f, 4, fixup_rtp_spoof, 0, REQUEST_ROUTE|ONREPLY_ROUTE|FAILURE_ROUTE|BRANCH_ROUTE},
+		{"rtcp_add", (cmd_function)rtcp_add_f, 2, fixup_rtcp_add, 0, ANY_ROUTE},
 		{0, 0, 0, 0, 0, 0}
 };
 
 
+str server_ip = {0, 0};
 static param_export_t params[] = {
-//		{"delay_ms", INT_PARAM, &latch_delay_ms},
+		{"server_ip", PARAM_STR, &server_ip},
 		{0, 0, 0}
 };
 
@@ -82,6 +85,7 @@ static int fixup_rtp_spoof(void** param, int param_no) {
 }
 
 
+
 // void sigchld_handler(int s) {
 // 	// waitpid() might overwrite errno, so we save and restore it:
 // 	int saved_errno = errno;
@@ -100,40 +104,40 @@ int add_session (rtcp_sessions_t *s, char *port) {
 	hints.ai_socktype = SOCK_DGRAM;
 	hints.ai_flags = AI_PASSIVE; // use my IP
 
-	if ((rv = getaddrinfo("127.0.0.1", port, &hints, &servinfo)) != 0) {
-		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+	if ((rv = getaddrinfo(server_ip.s, port, &hints, &servinfo)) != 0) {
+		LM_INFO("getaddrinfo: %s\n", gai_strerror(rv));
 		return 1;
 	}
 	// loop through all the results and bind to the first we can
 	for(p = servinfo; p != NULL; p = p->ai_next) {
 	        if ((fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) {
-	                perror("server: socket");
+	                LM_ERR("server: socket");
 	                continue;
 	        }
 	        if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
-	                perror("setsockopt");
+	                LM_ERR("setsockopt");
 	                exit(1);
 	        }
 	
 	        if (bind(fd, p->ai_addr, p->ai_addrlen) == -1) {
 	                close(fd);
-	                perror("server: bind");
+	                LM_ERR("server: bind");
 	                continue;
 	        }
 	        char host[1024];
 	        char service[20];
 	        getnameinfo(p->ai_addr, p->ai_addrlen, host, sizeof host, service, sizeof service, 0);
-	        printf("local[%s:%s]\n", host, service);
+	        LM_INFO("local[%s:%s]\n", host, service);
 	        break;
 	}
 	freeaddrinfo(servinfo);
 	if (p == NULL)  {
-		fprintf(stderr, "server: failed to bind\n");
+		LM_ERR("server: failed to bind\n");
 		exit(1);
 	}
 	FD_SET(fd, &s->set);
 	if (s->fdmax < fd) s->fdmax = fd;
-	printf("server: [%s] added [%d] waiting for connections...\n", port, fd);
+	LM_INFO("server: [%s] added [%d] waiting for connections...\n", port, fd);
 
 	// remote socket
 	s->session[fd].remote_port = atoi(port);
@@ -144,6 +148,34 @@ int add_session (rtcp_sessions_t *s, char *port) {
 	s->session[fd].socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
 
 	return fd;
+}
+
+static int fixup_rtcp_add(void **param, int param_no)
+{
+	if(param_no == 1 || param_no == 2)
+		return fixup_spve_null(param, 1);
+	LM_ERR("invalid parameter count [%d]\n", param_no);
+	return -1;
+}
+
+
+
+static int rtcp_add_f(struct sip_msg *msg, char *_ip, char *_port)
+{
+	str ip = {NULL, 0};
+	str port = {NULL, 0};
+	if(get_str_fparam(&ip, msg, (gparam_p)_ip) != 0) {
+		LM_ERR("rtcp_add: missing ip\n");
+		return -1;
+	}
+	if(get_str_fparam(&port, msg, (gparam_p)_port) != 0) {
+		LM_ERR("rtcp_add: missing ip\n");
+		return -1;
+	}
+	*new_port = atoi(port.s);
+	//add_session(&sessions, port.s);
+	LM_INFO("new rtcp port [%d]\n", *new_port);
+	return 1;
 }
 
 int del_session(rtcp_sessions_t *s, int fd) {
@@ -163,7 +195,7 @@ void rtcp_serve(void) {
         fd_set read_fds;  // temp file descriptor list for select()
         FD_ZERO(&read_fds);
 
-        rtcp_sessions_t sessions;
+
         rtcp_sessions_init(&sessions);
 
         struct timeval tv;
@@ -185,10 +217,17 @@ void rtcp_serve(void) {
                 tv.tv_sec = 1;
                 tv.tv_usec = 0;
                 if (select(sessions.fdmax+1, &read_fds, NULL, NULL, &tv) == -1) {
-                        perror("select");
+                        LM_ERR("select");
                         exit(4);
                 }
 
+		if (*new_port) {
+			LM_INFO("new_port[%d]\n", *new_port);
+			char tmpport[6];
+			snprintf(tmpport,6,"%d",*new_port);
+        		add_session(&sessions, tmpport);
+			*new_port = 0;
+		}
                 for(i = 0; i <= sessions.fdmax; i++) {
                         if (FD_ISSET(i, &read_fds)) {
                                 struct sockaddr_storage from;
@@ -199,8 +238,10 @@ void rtcp_serve(void) {
                                         char host[1024];
                                         char service[20];
                                         getnameinfo((struct sockaddr*)&from, len, host, sizeof host, service, sizeof service, 0);
-                                        printf("[%d][:%d]remote[%s:%s] recv[%dbytes]\n", i, sessions.session[i].remote_port ,host, service, nbytes);
+                                        LM_INFO("[%d][:%d]remote[%s:%s] recv[%dbytes]\n", i, sessions.session[i].remote_port ,host, service, nbytes);
                                         sendto(sessions.session[i].socket_fd, buf, nbytes, 0, (struct sockaddr*)&sessions.session[i].to, sizeof(sessions.session[i].to));
+					rtcp_msg_t *rtcp_msg = (rtcp_msg_t *) buf;
+					LM_INFO("RCTP version[%d]\n", rtcp_msg->header.version);
                                 }
 
                         }
@@ -217,7 +258,9 @@ static int mod_init(void)
 //	vars = shm_malloc(sizeof(shared_global_vars_t));
 //	vars->spoof_info_list = (spoof_info_t*) shm_malloc(sizeof(spoof_info_t));
 //	clist_init(vars->spoof_info_list, next, prev);
-//	LM_ERR("\n");
+//	LM_ERR("\n")
+//
+	new_port = shm_malloc(sizeof(int));
 	register_procs(PROC_COUNT);
 	return 0;
 }
