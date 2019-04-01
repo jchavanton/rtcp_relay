@@ -55,14 +55,21 @@ typedef struct rctp_sessions {
 
 
 #define SWITCH_RTCP_MAX_BUF_LEN 16384
-
 typedef struct switch_rtcp_hdr_s {
-	unsigned version:2;         /* protocol version                  */
-	unsigned p:1;               /* padding flag                      */
 	unsigned count:5;           /* number of reception report blocks */
+	unsigned p:1;               /* padding flag                      */
+	unsigned version:2;         /* protocol version                  */
 	unsigned type:8;            /* packet type                       */
 	unsigned length:16;         /* length in 32-bit words - 1        */
 } switch_rtcp_hdr_t;
+
+//typedef struct switch_rtcp_hdr_s {
+//	unsigned version:2;         /* protocol version                  */
+//	unsigned p:1;               /* padding flag                      */
+//	unsigned count:5;           /* number of reception report blocks */
+//	unsigned type:8;            /* packet type                       */
+//	unsigned length:16;         /* length in 32-bit words - 1        */
+//} switch_rtcp_hdr_t;
 
 typedef struct {
 	switch_rtcp_hdr_t header;

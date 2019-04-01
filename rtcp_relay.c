@@ -29,6 +29,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <netinet/in.h>
 
 
 MODULE_VERSION
@@ -240,8 +241,14 @@ void rtcp_serve(void) {
                                         getnameinfo((struct sockaddr*)&from, len, host, sizeof host, service, sizeof service, 0);
                                         LM_INFO("[%d][:%d]remote[%s:%s] recv[%dbytes]\n", i, sessions.session[i].remote_port ,host, service, nbytes);
                                         sendto(sessions.session[i].socket_fd, buf, nbytes, 0, (struct sockaddr*)&sessions.session[i].to, sizeof(sessions.session[i].to));
-					rtcp_msg_t *rtcp_msg = (rtcp_msg_t *) buf;
-					LM_INFO("RCTP version[%d]\n", rtcp_msg->header.version);
+					rtcp_msg_t *rtcp_msg_p = (rtcp_msg_t *) buf;
+					LM_INFO("RCTP version[%d] type[%d] count[%d] p[%d] length[%d]\n",
+						rtcp_msg_p->header.version,
+						rtcp_msg_p->header.type,
+						rtcp_msg_p->header.count,
+						rtcp_msg_p->header.p,
+						ntohs(rtcp_msg_p->header.length)
+					);
                                 }
 
                         }
